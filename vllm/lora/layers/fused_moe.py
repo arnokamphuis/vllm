@@ -26,17 +26,7 @@ class FusedMoEWithLoRA(BaseLayerWithLoRA):
     def __init__(self, base_layer: FusedMoE) -> None:
         super().__init__()
         self.base_layer = base_layer
-
-        if self.base_layer.use_ep:
-            moe_config = self.base_layer.moe_config
-            all2all_backend = moe_config.moe_parallel_config.all2all_backend
-            assert all2all_backend == "allgather_reducescatter", (
-                "Fused MoE LoRA with EP currently only supports "
-                f"all2all_backend='allgather_reducescatter', got '{all2all_backend}'."
-            )
-        assert not self.base_layer.quant_method.is_monolithic, (
-            "Monolithic kernels are not supported for Fused MoE LoRA."
-        )
+        self._ep_check()
         # Use the MoE-aware TP rank/size: when EP is active, FusedMoE collapses
         # moe_parallel_config.tp_size to 1 (experts are sharded across the
         # TP group instead).
@@ -154,7 +144,17 @@ class FusedMoEWithLoRA(BaseLayerWithLoRA):
             ),
         )
 
-    def _verify_ep_fs(self, lora_config):
+    def _ep_check(self):
+        if self.base_layer.use_ep:
+            moe_config = self.base_layer.moe_config
+            all2all_backend = moe_config.moe_parallel_config.all2all_backend
+            assert all2all_backend == "allgather_reducescatter", (
+                "Fused MoE LoRA with EP currently only supports "
+                f"all2all_backend='allgather_reducescatter', got '{all2all_backend}'."
+            )
+            assert not moe_config.moe_parallel_config.is_sequence_parallel
+
+    def _verify_ep_fs(self, lora_config: LoRAConfig):
         # EP and fully_sharded LoRA both partition along the same TP group —
         # EP on the expert dim, fully_sharded on the LoRA rank dim — with
         # mutually contradictory assumptions about which rank holds which
