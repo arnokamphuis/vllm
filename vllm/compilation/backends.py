@@ -929,7 +929,7 @@ class VllmBackend:
         # TODO proper PassManager?
         pre_grad_pass_key = "pre_grad_custom_pass"
         assert self.pass_key != pre_grad_pass_key
-        assert self.pass_key not in self.inductor_config
+        assert pre_grad_pass_key not in self.inductor_config
         self.inductor_config[pre_grad_pass_key] = VllmIRInplaceFunctionalizationPass(
             self.vllm_config
         )

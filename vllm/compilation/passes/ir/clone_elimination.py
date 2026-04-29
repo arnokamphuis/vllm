@@ -3,7 +3,8 @@
 import torch
 from torch import fx
 from torch._higher_order_ops.auto_functionalize import auto_functionalized
-from torch._ops import OpOverload
+from torch._higher_order_ops.triton_kernel_wrap import TritonKernelWrapperFunctional
+from torch._ops import HigherOrderOperator, OpOverload
 
 from vllm.config import VllmConfig
 from vllm.logger import init_logger
@@ -25,6 +26,10 @@ def user_writes_to_node(user: fx.Node, node: fx.Node) -> bool:
         # It is also guaranteed to be the final use,
         # as auto_functionalized returns the tensor back for follow-up use.
         return False
+    elif user.op == "call_function" and isinstance(user.target, HigherOrderOperator):
+        # By default, be conservative, assume this could be a write
+        # (except functional HOPs)
+        return not isinstance(user.target, TritonKernelWrapperFunctional)
 
     assert isinstance(user.target, OpOverload), (
         f"{node=} {user=} {user.op=} {user.target=}"
