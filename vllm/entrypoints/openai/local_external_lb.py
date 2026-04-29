@@ -9,6 +9,7 @@ import asyncio
 import contextlib
 import copy
 import multiprocessing
+import os
 import signal
 import time
 from dataclasses import dataclass
@@ -34,6 +35,7 @@ logger = init_logger(__name__)
 
 HEALTHCHECK_INTERVAL_S = 5.0
 HEALTHCHECK_TIMEOUT_S = 5.0
+DEFAULT_CHILD_GRACEFUL_TERMINATION = 5.0
 
 
 def infer_multi_port_external_lb_start_rank(args: argparse.Namespace) -> int:
@@ -257,6 +259,7 @@ class MultiPortExternalLBSupervisor:
         self._failed_process: BaseProcess | None = None
         self._supervisor_server: uvicorn.Server | None = None
         self._supervisor_server_task: asyncio.Task[None] | None = None
+        self._shutdown_signal = signal.SIGTERM
 
     async def run(self) -> None:
         loop = asyncio.get_running_loop()
@@ -285,6 +288,7 @@ class MultiPortExternalLBSupervisor:
     def _handle_signal(self, signum: int) -> None:
         if self._stop_requested.is_set():
             return
+        self._shutdown_signal = signal.Signals(signum)
         logger.info(
             "Received signal %d, forwarding graceful termination to "
             "multi-port external LB child ranks",
@@ -413,13 +417,25 @@ class MultiPortExternalLBSupervisor:
     async def _shutdown_children(self) -> None:
         if self.processes:
             logger.info(
-                "Forwarding SIGTERM to %d multi-port external LB child processes",
+                "Forwarding signal %d to %d multi-port external LB child processes",
+                self._shutdown_signal,
                 len(self.processes),
             )
-            timeout = max(self.args.shutdown_timeout, 5.0)
+            timeout = max(
+                self.args.shutdown_timeout,
+                DEFAULT_CHILD_GRACEFUL_TERMINATION,
+            )
             deadline = time.monotonic() + timeout
             for process in self.processes:
-                if process.is_alive():
+                if not process.is_alive():
+                    continue
+                if (
+                    self._shutdown_signal == signal.SIGINT
+                    and (pid := process.pid) is not None
+                ):
+                    with contextlib.suppress(ProcessLookupError):
+                        os.kill(pid, self._shutdown_signal)
+                else:
                     process.terminate()
 
             while time.monotonic() < deadline:
