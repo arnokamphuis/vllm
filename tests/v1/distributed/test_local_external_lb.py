@@ -5,7 +5,7 @@ import argparse
 
 from vllm.entrypoints.openai.local_external_lb import (
     MultiPortExternalLBChildStatus,
-    MultiPortExternalLBState,
+    MultiPortExternalLBSupervisor,
     build_multi_port_external_lb_child_args,
     infer_multi_port_external_lb_start_rank,
 )
@@ -16,7 +16,7 @@ def _make_args(**overrides) -> argparse.Namespace:
         "host": None,
         "port": 8000,
         "data_parallel_multi_port_external_lb": True,
-        "data_parallel_supervisor_port": None,
+        "data_parallel_supervisor_port": 9256,
         "data_parallel_size": 8,
         "data_parallel_size_local": 4,
         "data_parallel_start_rank": None,
@@ -56,28 +56,22 @@ def test_build_multi_port_external_lb_child_args_sets_external_rank_server():
     assert child_args.api_server_count == 1
 
 
-def test_multi_port_external_lb_state_aggregates_health():
-    state = MultiPortExternalLBState(
-        [
-            MultiPortExternalLBChildStatus(0, 4, 8000),
-            MultiPortExternalLBChildStatus(1, 5, 8001),
-        ]
-    )
+def test_multi_port_external_lb_supervisor_aggregates_health():
+    supervisor = MultiPortExternalLBSupervisor(_make_args())
 
-    state.update_children(
-        [
-            MultiPortExternalLBChildStatus(0, 4, 8000, healthy=True),
-            MultiPortExternalLBChildStatus(1, 5, 8001, healthy=True),
-        ],
-    )
+    supervisor.child_statuses = [
+        MultiPortExternalLBChildStatus(0, 4, 8000, healthy=True),
+        MultiPortExternalLBChildStatus(1, 5, 8001, healthy=True),
+    ]
 
-    assert state.is_healthy() is True
+    assert supervisor.is_healthy() is True
 
 
-def test_multi_port_external_lb_state_marks_unhealthy_while_shutting_down():
-    state = MultiPortExternalLBState(
-        [MultiPortExternalLBChildStatus(0, 4, 8000, healthy=True)]
-    )
-    state.begin_shutdown()
+def test_multi_port_external_lb_supervisor_is_unhealthy_while_shutting_down():
+    supervisor = MultiPortExternalLBSupervisor(_make_args())
+    supervisor.child_statuses = [
+        MultiPortExternalLBChildStatus(0, 4, 8000, healthy=True)
+    ]
+    supervisor.begin_shutdown()
 
-    assert state.is_healthy() is False
+    assert supervisor.is_healthy() is False

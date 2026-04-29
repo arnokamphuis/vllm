@@ -192,25 +192,8 @@ class MultiPortExternalLBChildStatus:
     last_error: str | None = None
 
 
-class MultiPortExternalLBState:
-    def __init__(self, children: list[MultiPortExternalLBChildStatus]):
-        self._children = children
-        self._shutting_down = False
-
-    def update_children(self, children: list[MultiPortExternalLBChildStatus]) -> None:
-        self._children = children
-
-    def begin_shutdown(self) -> None:
-        self._shutting_down = True
-
-    def is_healthy(self) -> bool:
-        return not self._shutting_down and all(
-            child.healthy and child.exitcode is None for child in self._children
-        )
-
-
 def _build_multi_port_external_lb_supervisor_app(
-    state: MultiPortExternalLBState,
+    supervisor: MultiPortExternalLBSupervisor,
 ) -> FastAPI:
     app = FastAPI(openapi_url=None, docs_url=None, redoc_url=None)
 
@@ -221,13 +204,13 @@ def _build_multi_port_external_lb_supervisor_app(
 
     @app.get("/health", include_in_schema=False)
     async def health() -> Response:
-        return _status_response(state.is_healthy())
+        return _status_response(supervisor.is_healthy())
 
     @app.get("/ready", include_in_schema=False)
     @app.get("/readyz", include_in_schema=False)
     async def ready() -> Response:
         # when child servers is healthy, it is ready already
-        return _status_response(state.is_healthy())
+        return _status_response(supervisor.is_healthy())
 
     return app
 
@@ -259,13 +242,22 @@ class MultiPortExternalLBSupervisor:
             )
             for local_rank in range(args.data_parallel_size_local)
         ]
-        self.state = MultiPortExternalLBState(copy.deepcopy(self.child_specs))
+        self.child_statuses = copy.deepcopy(self.child_specs)
         self.processes: list[BaseProcess] = []
         self._stop_requested = asyncio.Event()
         self._failed_process: BaseProcess | None = None
         self._supervisor_server: uvicorn.Server | None = None
         self._supervisor_server_task: asyncio.Task[None] | None = None
         self._shutdown_signal = signal.SIGTERM
+        self._shutting_down = False
+
+    def begin_shutdown(self) -> None:
+        self._shutting_down = True
+
+    def is_healthy(self) -> bool:
+        return not self._shutting_down and all(
+            child.healthy and child.exitcode is None for child in self.child_statuses
+        )
 
     async def run(self) -> None:
         loop = asyncio.get_running_loop()
@@ -277,7 +269,7 @@ class MultiPortExternalLBSupervisor:
             self._start_children()
             await self._monitor_children()
         finally:
-            self.state.begin_shutdown()
+            self.begin_shutdown()
             self._stop_requested.set()
             await self._shutdown_children()
             await self._shutdown_supervisor_server()
@@ -300,12 +292,12 @@ class MultiPortExternalLBSupervisor:
             "multi-port external LB child ranks",
             signum,
         )
-        self.state.begin_shutdown()
+        self.begin_shutdown()
         self._stop_requested.set()
 
     async def _start_supervisor_server(self) -> None:
         host = self.args.host or "0.0.0.0"
-        app = _build_multi_port_external_lb_supervisor_app(self.state)
+        app = _build_multi_port_external_lb_supervisor_app(self)
         config = uvicorn.Config(
             app,
             host=host,
@@ -399,7 +391,7 @@ class MultiPortExternalLBSupervisor:
                         for spec, process in zip(self.child_specs, self.processes)
                     )
                 )
-                self.state.update_children(statuses)
+                self.child_statuses = statuses
                 self._failed_process = next(
                     (
                         process
