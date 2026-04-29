@@ -82,7 +82,6 @@ Implementations can specify:
 
 - `supported`: Static boolean indicating if this implementation is available
 - `supports_args`: Function checking if the implementation supports specific arguments
-- `batch_invariant`: Whether this implementation produces batch-invariant results
 - `inplace`: Whether this implementation reuses input memory for outputs
 
 ### Using IR Operations in Models
@@ -115,9 +114,8 @@ class RMSNorm(nn.Module):
 Kernel selection is controlled via priority lists in the configuration.
 Priority lists specify the order in which implementations are considered,
 with the first supported implementation being selected.
-This includes the static support check (`supported=...`),
-the dynamic arg support check (`supports_args=...`),
-and batch-invariance filtering if `VLLM_BATCH_INVARIANT=1` is set.
+This includes the static support check (`supported=...`) and
+the dynamic arg support check (`supports_args=...`).
 
 #### Command Line Configuration
 
@@ -351,7 +349,6 @@ Operations are declared with the `@register_op` decorator, which creates an `IrO
 ```python
 @register_op(
     name=None,           # Operation name (defaults to function name)
-    has_reduction=False, # Whether op performs reduction (affects batch invariance)
     activations=None,    # List of activation parameters (defaults to params starting with 'x')
     allow_inplace=False, # Whether to create a maybe_inplace overload
 )
@@ -361,7 +358,6 @@ def op_name(...):
 
 **Parameters:**
 
-- `has_reduction`: Set to `True` for operations like normalization that reduce across dimensions. This affects batch invariance requirements.
 - `activations`: List of parameter names considered "activations" (typically consumed by `maybe_inplace`). Defaults to parameters starting with `x`.
 - `allow_inplace`: Creates a `maybe_inplace` overload for memory-efficient execution (see below).
 
@@ -479,7 +475,6 @@ Implementations are registered using the `register_impl` method:
     provider="provider_name",  # Unique identifier (e.g., "vllm_c", "aiter", "triton")
     supported=True,            # Static availability check
     supports_args=None,        # Dynamic argument support check
-    batch_invariant=False,     # Whether implementation is batch-invariant
 )
 def impl_fn(...):
     ...
@@ -490,7 +485,7 @@ def impl_fn(...):
 - `native`: Reserved for the native torch implementation (declared with `@register_op`)
 - `vllm_c`: C++/CUDA kernels via `torch.ops._C`
 - `aiter`: AMD AITER library
-- `triton_*`: Triton kernels (e.g., `triton_batch_invariant`)
+- `triton_*`: Triton kernels
 - Platform/library names for other implementations
 
 **Support checking:**
@@ -515,19 +510,6 @@ def aiter_rms_norm_supports(x, weight, epsilon, variance_size=None):
 
 @ir.ops.rms_norm.register_impl("aiter", supports_args=aiter_rms_norm_supports)
 def rms_norm(...):
-    ...
-```
-
-### Batch Invariance
-
-Batch-invariant implementations produce identical per-example outputs regardless of batch size.
-This is critical for RLHF and other training scenarios where numerical reproducibility is required.
-
-```python
-@ir.ops.rms_norm.register_impl("triton_batch_invariant", batch_invariant=True)
-def rms_norm(...):
-    # Implementation uses careful reduction algorithms to ensure
-    # output is identical irrespective of the batch size
     ...
 ```
 
