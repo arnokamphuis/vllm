@@ -26,6 +26,7 @@ from vllm.compilation.passes.ir.lowering_pass import VllmIRLoweringPass
 from vllm.config import VllmConfig
 from vllm.ir import ops
 from vllm.platforms import current_platform
+from vllm.triton_utils import HAS_TRITON, tl, triton
 
 from ...backend import TestBackend
 
@@ -106,6 +107,58 @@ class MixedModel(nn.Module):
         return x_normed1, x_normed2, residual_out1, residual_out2
 
 
+class ModelWithTritonAfterMaybeInplace(nn.Module):
+    """
+    Model using maybe_inplace followed by a Triton kernel.
+    Test clone elimination can handle Triton in the graph
+    """
+
+    def __init__(self, hidden_size=16):
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(hidden_size, dtype=torch.bfloat16))
+
+        @triton.jit
+        def _triton_add_kernel(
+            x_ptr,
+            y_ptr,
+            n_elements,
+            BLOCK_SIZE: tl.constexpr,
+        ):
+            pid = tl.program_id(axis=0)
+            block_start = pid * BLOCK_SIZE
+            offsets = block_start + tl.arange(0, BLOCK_SIZE)
+            mask = offsets < n_elements
+            x = tl.load(x_ptr + offsets, mask=mask)
+            y = x + 0.1
+            tl.store(y_ptr + offsets, y, mask=mask)
+
+        def triton_add(x: torch.Tensor) -> torch.Tensor:
+            """Simple Triton add kernel."""
+            y = torch.empty_like(x)
+            n_elements = x.numel()
+            grid = (triton.cdiv(n_elements, 256),)
+            _triton_add_kernel[grid](x, y, n_elements, BLOCK_SIZE=256)
+            return y
+
+        self.triton_add = triton_add
+
+    def forward(self, x: torch.Tensor, residual: torch.Tensor, residual2: torch.Tensor):
+        x_normed, residual_out = ops.fused_add_rms_norm.maybe_inplace(
+            x, residual, self.weight, 1e-5
+        )
+
+        x_processed = self.triton_add(x_normed)
+
+        # x_processed does not need to be cloned, residual2 does
+        x_normed2, residual_out2 = ops.fused_add_rms_norm(
+            x_processed, residual2, self.weight, 1e-5
+        )
+        return x_normed2, residual_out2
+
+
+skipif_no_triton = pytest.mark.skipif(not HAS_TRITON, reason="Requires Triton")
+
+
 @pytest.mark.skipif(
     not current_platform.is_cuda_alike(),
     reason="Only test on cuda and rocm platform",
@@ -119,6 +172,8 @@ class MixedModel(nn.Module):
         (FunctionalModel, 0, 0, 3),
         # One inplace call, two donated activations, 2 clones
         (MixedModel, 1, 2, 2),
+        # One inplace call, two donated, 1 clone remaining
+        pytest.param(ModelWithTritonAfterMaybeInplace, 1, 2, 1, marks=skipif_no_triton),
     ],
 )
 def test_inplace_functionalization(
