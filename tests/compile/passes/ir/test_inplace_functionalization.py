@@ -31,7 +31,7 @@ from ...backend import TestBackend
 
 
 class StoreDonationInfoPass(InductorPass):
-    def __init__(self, vllm_config: VllmConfig):
+    def __init__(self):
         self.donated_input_ids_sets: list[set[int]] = []
 
     def __call__(self, *args, **kwargs):
@@ -140,7 +140,7 @@ def test_inplace_functionalization(
     # Create passes in order they run during compilation
     functionalization_pass = VllmIRInplaceFunctionalizationPass(default_vllm_config)
     lowering_pass = VllmIRLoweringPass(default_vllm_config)
-    donated_info_pass = StoreDonationInfoPass(default_vllm_config)
+    donated_info_pass = StoreDonationInfoPass()
     cleanup_pass = UnsafeCloneEliminationPass(default_vllm_config)
 
     # Set up backend with pre-grad pass
@@ -203,7 +203,7 @@ def test_donated_buffer_context_propagation(default_vllm_config):
     functionalization_pass = VllmIRInplaceFunctionalizationPass(default_vllm_config)
     lowering_pass = VllmIRLoweringPass(default_vllm_config)
 
-    donation_info_pass = StoreDonationInfoPass(default_vllm_config)
+    donation_info_pass = StoreDonationInfoPass()
     cleanup_pass = UnsafeCloneEliminationPass(default_vllm_config)
 
     backend = TestBackend(lowering_pass, donation_info_pass, cleanup_pass)
@@ -321,7 +321,7 @@ class TransformerBlockWithSplits(nn.Module):
         residual1 = x
         attn_out = self.attn_proj(x)
 
-        # Fused add + norm (maybe_inplace: attn_out is donated)
+        # Fused add + norm (maybe_inplace: residual1 is donated)
         normed1, residual1 = ops.fused_add_rms_norm.maybe_inplace(
             attn_out, residual1, self.post_attn_norm, 1e-5
         )
@@ -334,7 +334,7 @@ class TransformerBlockWithSplits(nn.Module):
         up = self.up_proj(normed1)
         mlp_out = self.down_proj(gate * torch.nn.functional.silu(up))
 
-        # Fused add + norm (maybe_inplace: mlp_out is donated)
+        # Fused add + norm (maybe_inplace: residual1 is donated)
         normed2, residual2 = ops.fused_add_rms_norm.maybe_inplace(
             mlp_out, residual1, self.post_mlp_norm, 1e-5
         )
@@ -354,10 +354,10 @@ def with_dyn_arg(fn: Callable, arg_index: int, dim_index: int):
     not current_platform.is_cuda_alike(),
     reason="Only test on cuda and rocm platform",
 )
-def test_piecewise_compilation_with_donated_buffers(monkeypatch):
+def test_piecewise_compilation_with_donated_buffers(monkeypatch, fresh_vllm_cache):
     """
     Test piecewise compilation with donated buffers across graph splits.
-    Uses a custom splitting op.
+    Utilizes a custom splitting op. Uses fresh cache to avoid compilation caching.
     """
     torch.set_default_device(current_platform.device_type)
 
@@ -368,10 +368,12 @@ def test_piecewise_compilation_with_donated_buffers(monkeypatch):
     from vllm.config import CompilationConfig, VllmConfig
 
     # Create config with custom splitting op
+    store_donation_info = StoreDonationInfoPass()
     vllm_config = VllmConfig(
         compilation_config=CompilationConfig(
             custom_ops=["all"],
             splitting_ops=["vllm::test_split_marker"],
+            inductor_compile_config={"post_grad_custom_post_pass": store_donation_info},
         )
     )
 
@@ -400,3 +402,9 @@ def test_piecewise_compilation_with_donated_buffers(monkeypatch):
     assert num_submodules >= 2, (
         f"Expected at least 2 submodules (split), got {num_submodules}"
     )
+
+    # Check that donation info was propagated correctly
+    donated_inputs_sets = store_donation_info.donated_input_ids_sets
+    assert len(donated_inputs_sets) == 2
+    assert len(donated_inputs_sets[0]) == 1
+    assert len(donated_inputs_sets[1]) == 1

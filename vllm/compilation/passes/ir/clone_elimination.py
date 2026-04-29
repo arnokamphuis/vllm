@@ -42,11 +42,8 @@ def user_writes_to_node(user: fx.Node, node: fx.Node) -> bool:
             continue
 
         # If not a write, next arg could be
-        if not schema.arguments[i].is_write:
-            continue
-
-        # Short-circuit, we know it's a write
-        return True
+        if schema.arguments[i].is_write:
+            return True
 
     # No writes found
     return False
@@ -55,6 +52,13 @@ def user_writes_to_node(user: fx.Node, node: fx.Node) -> bool:
 class UnsafeCloneEliminationPass(VllmInductorPass):
     """
     This pass removes clone nodes that are no longer needed after vLLM IR lowering.
+    It uses donated_input_ids to eliminate clones of donated graph inputs, preserving
+    contents of non-donated graph inputs.
+
+    It is "unsafe" because it does not (yet) take aliasing into account. Solving
+    aliasing is an open problem, so this pass intends to support known vLLM cases
+    and not guarantee soundness on general graphs. In the future, this pass will likely
+    support basic forms of aliasing to handle simple views (e.g. qkv -> q,k,v).
     """
 
     def __init__(self, vllm_config: VllmConfig) -> None:

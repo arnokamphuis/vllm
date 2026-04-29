@@ -198,7 +198,7 @@ in the FX graph without decomposition:
 ```python
 # Python code (epsilon=1e-5)
 x1 = ir.ops.rms_norm(x, weight, epsilon)
-x2, residual_out = ir.ops.fused_add_rms_norm,maybe_inplace(x1, residual, weight, epsilon)
+x2, residual_out = ir.ops.fused_add_rms_norm.maybe_inplace(x1, residual, weight, epsilon)
 
 # FX graph after Dynamo tracing
 x1 = torch.ops.vllm_ir.rms_norm.default(x, weight, 1e-5); x = None
