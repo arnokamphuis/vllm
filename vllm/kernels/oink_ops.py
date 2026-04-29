@@ -1,5 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+"""This file registers Oink implementations for vLLM IR ops.
+
+vLLM does not depend on the external Oink repository/package. When an external
+plugin registers torch.library.custom_op entrypoints under the `oink::`
+namespace (e.g. via vLLM's general_plugins mechanism), these ops will be marked
+ as supported. To dispatch to those ops, set kernel_config.ir_op_priority.<op> to oink.
+Alternatively, `VLLM_USE_OINK_OPS=1` will add this to priority by default.
+"""
 
 import torch
 from torch import Tensor
@@ -13,6 +21,8 @@ OINK_AVAILABLE = current_platform.has_device_capability(100) and hasattr(
 
 
 def has_oink_op(name: str) -> bool:
+    print(f"{OINK_AVAILABLE=}")
+    print(f"{hasattr(torch.ops.oink, name)=}")
     """Check if a specific oink op is registered."""
     return OINK_AVAILABLE and hasattr(torch.ops.oink, name)
 
@@ -114,5 +124,5 @@ def fused_add_rms_norm(
     assert variance_size is None
     x_2d = x.view(-1, x.shape[-1])
     residual_2d = x_residual.view(-1, x_residual.shape[-1])
-    torch.ops.oink.fused_add_rms_norm_(x_2d, residual_2d, weight, epsilon)
+    torch.ops.oink.fused_add_rms_norm(x_2d, residual_2d, weight, epsilon)
     return x, x_residual
