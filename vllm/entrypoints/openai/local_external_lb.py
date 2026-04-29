@@ -233,6 +233,7 @@ def _run_multi_port_external_lb_child(
     from vllm.entrypoints.openai.api_server import run_server
 
     rank = child_args.data_parallel_rank
+    os.setpgrp()
     update_environment_variables(env_updates)
     set_process_title("ExternalLBRank", str(rank))
     decorate_logs(f"ExternalLBRank{rank}")
@@ -427,16 +428,10 @@ class MultiPortExternalLBSupervisor:
             )
             deadline = time.monotonic() + timeout
             for process in self.processes:
-                if not process.is_alive():
+                if not process.is_alive() or (pid := process.pid) is None:
                     continue
-                if (
-                    self._shutdown_signal == signal.SIGINT
-                    and (pid := process.pid) is not None
-                ):
-                    with contextlib.suppress(ProcessLookupError):
-                        os.kill(pid, self._shutdown_signal)
-                else:
-                    process.terminate()
+                with contextlib.suppress(ProcessLookupError, OSError):
+                    os.killpg(pid, self._shutdown_signal)
 
             while time.monotonic() < deadline:
                 alive = False
