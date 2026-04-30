@@ -94,14 +94,24 @@ ARG GIT_REPO_CHECK=0
 RUN --mount=type=bind,source=.git,target=.git \
     if [ "$GIT_REPO_CHECK" != 0 ]; then bash tools/check_repo.sh; fi
 
+# Intel XPU specific environment variables
 ENV VLLM_TARGET_DEVICE=xpu
 ENV VLLM_WORKER_MULTIPROC_METHOD=spawn
+ENV ONEAPI_DEVICE_SELECTOR=level_zero:*
+ENV ZE_ENABLE_NPU=0
+ENV ZE_ENABLE_PCI_ID_CHECK=0
+ENV NEOReadDebugKeys=1
 
 RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=.git,target=.git \
     uv pip install --no-build-isolation .
 
-CMD ["/bin/bash"]
+# Copy entrypoint script
+COPY docker/entrypoint-xpu.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["bash"]
 
 FROM vllm-base AS vllm-openai
 
@@ -170,4 +180,4 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip uninstall oneccl oneccl-devel
 
-ENTRYPOINT ["vllm", "serve"]
+ENTRYPOINT ["/entrypoint.sh", "vllm", "serve"]
