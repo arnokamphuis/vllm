@@ -122,7 +122,7 @@ class MemorySnapshot:
             self.total_memory = current_platform.get_device_total_memory(device.index)
             self.free_memory = min(psutil.virtual_memory().available,
                                    self.total_memory)
-            logger.warning(
+            logger.warning_once(
                 "XPU free-memory query is unsupported on this device; "
                 "falling back to host available memory estimate."
             )
