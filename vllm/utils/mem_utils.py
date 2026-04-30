@@ -114,9 +114,8 @@ class MemorySnapshot:
             # Some Intel integrated GPUs do not implement free-memory query
             # in torch.xpu yet; use total device memory and host available
             # memory as a conservative fallback so initialization can proceed.
-            is_xpu = getattr(current_platform, "device_type", None) == "xpu"
-            unsupported_mem_query = "doesn't support querying the available free memory" in str(
-                e)
+            is_xpu = current_platform.is_xpu()
+            unsupported_mem_query = "doesn't support querying the available free memory" in str(e)
             if not (is_xpu and unsupported_mem_query):
                 raise
 
