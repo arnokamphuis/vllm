@@ -836,10 +836,9 @@ class DeepseekV4MoE(nn.Module):
         self.n_local_experts = config.n_routed_experts // self.tp_size
         self.experts_start_idx = self.tp_rank * self.n_local_experts
         self.experts_end_idx = self.experts_start_idx + self.n_local_experts
-
+        # We don't pass `gate` into FusedMoE
         self.experts = FusedMoE(
             shared_experts=self.shared_experts,
-            gate=self.norm_gate.gate,
             num_experts=config.n_routed_experts,
             top_k=config.num_experts_per_tok,
             hidden_size=config.hidden_size,
@@ -904,24 +903,14 @@ class DeepseekV4MoE(nn.Module):
     def _forward_fused_moe(
         self, hidden_states: torch.Tensor, input_ids: torch.Tensor | None = None
     ) -> torch.Tensor:
+        assert not self.experts.is_internal_router
         org_shape = hidden_states.shape
-        if self.experts.is_internal_router:
-            # FusedMoE recomputes router logits internally from its own
-            # gate reference; only the RMSNorm half of norm_gate is
-            # needed here (skip the gate GEMV to avoid double work).
-            normed_x = self.norm_gate.norm(hidden_states)
-            final_hidden_states = self.experts(
-                hidden_states=normed_x,
-                router_logits=normed_x,
-                input_ids=input_ids,
-            )
-        else:
-            normed_x, router_logits = self.norm_gate(hidden_states)
-            final_hidden_states = self.experts(
-                hidden_states=normed_x,
-                router_logits=router_logits,
-                input_ids=input_ids,
-            )
+        normed_x, router_logits = self.norm_gate(hidden_states)
+        final_hidden_states = self.experts(
+            hidden_states=normed_x,
+            router_logits=router_logits,
+            input_ids=input_ids,
+        )
 
         return final_hidden_states.view(org_shape)
 
