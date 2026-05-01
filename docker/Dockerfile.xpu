@@ -87,7 +87,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 
 
-ENV LD_LIBRARY_PATH="$LD_LIBRARY_PATH:/usr/local/lib/"
+ENV LD_LIBRARY_PATH="/opt/intel/oneapi/ccl/latest/lib:/opt/intel/oneapi/ccl/latest/lib/cpu_gpu:$LD_LIBRARY_PATH:/usr/local/lib/"
 
 COPY . .
 ARG GIT_REPO_CHECK=0
@@ -106,12 +106,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=.git,target=.git \
     uv pip install --no-build-isolation .
 
-# Copy entrypoint script
-COPY docker/entrypoint-xpu.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
-
-ENTRYPOINT ["/entrypoint.sh"]
-CMD ["bash"]
+CMD ["/bin/bash"]
 
 FROM vllm-base AS vllm-openai
 
@@ -180,4 +175,4 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip uninstall oneccl oneccl-devel
 
-ENTRYPOINT ["/entrypoint.sh", "vllm", "serve"]
+ENTRYPOINT ["vllm", "serve"]
